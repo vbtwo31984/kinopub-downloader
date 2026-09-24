@@ -1,0 +1,1 @@
+"""kino.watch terminal client."""
