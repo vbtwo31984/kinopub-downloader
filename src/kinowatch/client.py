@@ -20,6 +20,11 @@ class KinoWatchError(RuntimeError):
     pass
 
 
+class SessionExpiredError(KinoWatchError):
+    def __init__(self) -> None:
+        super().__init__("Your saved session has expired. Please log in again.")
+
+
 @dataclass(frozen=True)
 class SearchResult:
     title: str
@@ -79,7 +84,7 @@ class KinoWatchClient:
     @property
     def is_logged_in(self) -> bool:
         response = self.http.get("/item/search", params={"query": ""})
-        return "/user/login" not in str(response.url)
+        return not _session_expired(response)
 
     def _load_cookies(self) -> None:
         try:
@@ -97,6 +102,9 @@ class KinoWatchClient:
         temporary.replace(self.state_path)
 
     def login(self, username: str, password: str) -> TwoFactorChallenge | None:
+        # A revoked session makes every page, including the login form, come back
+        # empty, so always start a login from a clean cookie jar.
+        self.http.cookies.clear()
         page = self.http.get("/user/login")
         page.raise_for_status()
         soup = BeautifulSoup(page.text, "html.parser")
@@ -133,15 +141,15 @@ class KinoWatchClient:
     def search(self, query: str) -> list[SearchResult]:
         response = self.http.get("/item/search", params={"query": query})
         response.raise_for_status()
-        if "/user/login" in str(response.url):
-            raise KinoWatchError("Your saved session has expired. Please log in again.")
+        if _session_expired(response):
+            raise SessionExpiredError()
         return parse_search_results(response.text)
 
     def sources(self, item_url: str) -> list[MediaSource]:
         response = self.http.get(item_url)
         response.raise_for_status()
-        if "/user/login" in str(response.url):
-            raise KinoWatchError("Your saved session has expired. Please log in again.")
+        if _session_expired(response):
+            raise SessionExpiredError()
         sources = parse_media_sources(response.text, str(response.url))
         expanded: list[MediaSource] = []
         for source in sources:
@@ -262,6 +270,20 @@ class KinoWatchClient:
             return float(probe.stdout.strip())
         except ValueError:
             return 0.0
+
+
+def _session_expired(response: httpx.Response) -> bool:
+    """Detect a logged-out response.
+
+    kino.watch either redirects to the login page or, for a revoked session,
+    answers 200 with an empty body while deleting the `_identity` cookie.
+    """
+    if "/user/login" in str(response.url) or not response.content.strip():
+        return True
+    return any(
+        cookie.startswith("_identity=deleted")
+        for cookie in response.headers.get_list("set-cookie")
+    )
 
 
 def parse_search_results(html: str) -> list[SearchResult]:
