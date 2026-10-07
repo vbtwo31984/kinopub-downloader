@@ -12,7 +12,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 from tqdm import tqdm
 
-from .client import KinoWatchClient, KinoWatchError, MediaSource, MediaTrack, SearchResult, TwoFactorChallenge
+from .client import KinoWatchClient, KinoWatchError, MediaSource, MediaTrack, SearchResult, SessionExpiredError, TwoFactorChallenge
 
 
 def _message(title: str, text: str) -> None:
@@ -209,7 +209,12 @@ def run_tui() -> None:
             query = input("\nSearch kino.watch (blank to quit): ").strip()
             if not query:
                 return
-            results = client.search(query)
+            try:
+                results = client.search(query)
+            except SessionExpiredError:
+                if not _login(client):
+                    return
+                results = client.search(query)
             if not results:
                 _message("No results", f'Nothing was found for "{query}". Try another search.')
                 continue
